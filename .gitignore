@@ -22,3 +22,6 @@
 
 # Local tooling config
 .claude/
+
+# Local session-start prompt, not part of the project
+START.md
