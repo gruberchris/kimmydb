@@ -6,72 +6,106 @@ A running note for picking work back up. Updated at the end of each branch.
 
 ---
 
-## As of 2026-08-09 — M5 complete
+## As of 2026-08-09 — M6 in progress: webhooks
 
-**Branch:** `m5-kimmy-cli`, off `main` (PRs #16–#25 merged). Not merged.
-**Gate:** 702 tests · fmt clean · clippy clean · native-dep check clean ·
-every command driven against a live node.
+**M0–M5 are complete.** Their record lives in [Decisions](decisions.md) and
+[Deviations](deviations.md); nothing about them is needed to continue here.
 
-**This finishes M5.** M0–M5 are all complete.
+**M6 delivers webhooks end to end and is not finished.** This section is written
+for someone starting cold.
 
-### What this branch did
-
-`kimmy` is a real client: one-shot subcommands over the ordinary HTTP API,
-JSON on stdout, diagnostics on stderr, non-zero exit on failure.
-
-Both shape decisions were Chris's. **One-shot rather than a shell**, because a
-REPL is this same command surface plus a terminal UI, so the commands come first
-and a shell could sit on top later. **Over HTTP rather than opening the file**,
-because redb allows one process to hold a database — a file-opening client could
-not run while a node was running, and would bypass authentication and RBAC.
-
-**There is no `--password` flag,** deliberately: it would land in shell history
-and in `ps` for every user on the machine. The password comes from stdin or
-`KIMMY_PASSWORD`, and `login` prints the token rather than writing it to disk, so
-there is no file whose permissions, lifetime and cleanup have to be defended.
-
-### Two tests that were wrong before they were right
-
-`there_is_no_password_flag` first searched the rendered help text — which
-*explains* why the flag does not exist, so the search found the explanation and
-passed for the wrong reason. Rewritten to walk clap's arguments, it still passed
-under mutation, because clap does not propagate subcommand arguments until
-`build()` is called. Only after both fixes does adding a flag turn it red.
-
-Worth remembering: the mutation that *seemed* to escape twice was also failing to
-compile the first time, so the "passed" line being read came from the restored
-run further down the same command. **Check that a mutation compiled before
-concluding a test missed it.**
-
-### M5 in one place
+### State of the branches
 
 | | |
 |---|---|
-| Login rate limiting | ADR-038 |
-| TLS, clients | ADR-039 |
-| Benchmarks | Vector index, write path, planner. Two guessed constants measured, one changed |
-| Aggregation pipeline | ADR-044's neighbour: nine stages, `$lookup` authorized separately |
-| Container fixes | A replication bug affecting ~48% of collection names |
-| Native-dependency CI check | The enforceable half of ADR-016 |
-| TLS, node↔node | ADR-040 — channel binding rather than PKI |
-| Backup and restore | ADR-041 |
-| Audit log, metrics | ADR-042, ADR-043 |
-| Point-in-time restore | ADR-044 |
-| `kimmy` CLI | This branch |
+| `main` | PRs #16–#30 merged. Registry, dispatcher, ownership, delivery, signing |
+| `m6-webhook-failure-handling` | **Pushed, not merged.** Per-subscription backoff, invalidation past retention, no history replay, webhook metrics |
 
-### Where to go next
+Start by merging or rebasing that branch — everything below assumes it.
+**Gate on it:** 748 tests · fmt · clippy `-D warnings` · `./scripts/check-native-deps.sh`.
 
-Nothing is blocked, and there is no M6 defined. The register's remaining debt is
-below. Candidates, in rough order of how often they would be felt:
+### What webhooks are, in one paragraph
+
+A client registers a URL against a collection; the cluster pushes change events
+to it. Same events as a [change stream](change-streams.md), opposite direction —
+for consumers that cannot hold a WebSocket. [Webhooks](webhooks.md) is the user
+documentation and is accurate; read it before the code.
+
+### The design, so it is not re-derived
+
+Read [ADR-045](decisions.md) for the full reasoning. The three load-bearing
+ideas:
+
+1. **The dispatcher is an ordinary oplog consumer**, like the embedding worker.
+   Nothing about it is special machinery.
+2. **Delivery progress is replicated state.** Each node writes *only its own*
+   record — `__kimmy.__webhook_progress`, `_id = {subscription}:{node}`, holding
+   a `VersionVector` — so there are no write conflicts, and any node reads the
+   union. This is what makes a node dying survivable.
+3. **Ownership is derived, not elected.** `owner = rendezvous_hash(subscription,
+   live SWIM members)`, a pure function every node computes independently. No
+   vote, no term, no coordinator. When the owner dies it leaves the live set,
+   survivors recompute, and one resumes from the union of progress.
+
+Two earlier designs were tried on paper and rejected, so do not re-propose them:
+the *originating* node delivering (loses events when that node dies) and *every*
+node delivering (N duplicates per write). Both fix which node delivers in
+advance; replicated progress is what removes that constraint.
+
+### Decisions already taken — do not re-litigate
 
 | | |
 |---|---|
-| `$in` does not use an index | Common query shape falling back to a scan |
-| Index ranges use one bound | Correct but less selective; needs multikey tracking on the write path |
-| HNSW snapshot persistence | A restart pays a full rebuild on first search |
-| Interactive shell | Now cheap: the command surface exists |
-| SRV discovery | Needs a DNS resolver crate |
-| Latency histograms, oplog lag | Both deliberately skipped in ADR-043 rather than guessed |
+| Delivery guarantee | **At-least-once.** Exactly-once is not achievable; every event carries a stable `X-Kimmy-Event-Id` so receivers deduplicate |
+| Who may register | The **`webhook`** action, independent of `watch`. Only `admin` implies it |
+| Egress | Private ranges blocked by default, `webhooks.allowed_hosts` to override. Resolved address checked, every address, redirects refused |
+| Where a subscription starts | **Now**, not the beginning of the oplog. Seeded at registration |
+| Signing | `HMAC-SHA256(secret, timestamp + "." + body)`, timestamp inside the signature |
+
+### Where the code is
+
+| | |
+|---|---|
+| `kimmy-api/src/webhooks.rs` | Registry, registration API, the `__kimmy.__webhooks` collection |
+| `kimmy-api/src/dispatch.rs` | The worker, progress, delivery, signing, backoff, invalidation |
+| `kimmy-api/src/ownership.rs` | Rendezvous hashing over the SWIM member set |
+| `kimmy-api/src/egress.rs` | Which URLs may be dialled |
+| `kimmy-api/tests/webhooks.rs` | Delivery against a receiver on a real socket |
+| `kimmyd/src/node.rs` | Spawns the dispatcher with the live `Members` handle |
+
+### What is left
+
+Small, and none of it blocking. The roadmap's M6 table has the full list; these
+are the ones worth doing:
+
+| Item | Note |
+|---|---|
+| **Backlog age metric** | The one an operator would actually alert on — "how far behind is this subscription". Neither it nor a live-subscriptions gauge is built; task 11 is 🚧 for this reason |
+| **Per-node delivery cap** | The only remaining item that is load-bearing: one webhook on a hot collection can currently saturate a node's outbound connections |
+| **Payload size cap** | `fullDocument` on large documents, batched, can produce a very large POST. Undecided what happens to a single event that exceeds it |
+| Test gaps | Batching behaviour under load, and that deleting a subscription stops it mid-flight. Task 12 is 🚧 |
+| MCP tool | Deliberately not built. Registering an egress path is not a reading act; revisit only if asked |
+
+### How this work has been verified
+
+Beyond the suite: a real Python receiver on a socket, verifying the HMAC. That
+found the useful things — per-subscription secrets being genuinely distinct
+(one subscription's delivery read INVALID at a receiver holding another's
+secret), and the history-replay behaviour that became the "start from now" fix.
+
+**Mutation-test anything touching delivery or egress.** Seventeen mutations
+have been run across the three M6 branches — six on the registry, six on the
+dispatcher, five on failure handling. **One escaped, and it was in the egress
+check**: only the first resolved address was being tested, so a host answering
+`[public, metadata]` would have been let through. Nothing covered it because a
+unit test cannot make DNS return a chosen pair; the fix was to make the rule
+testable (`permits_addrs` takes the list) rather than to test around it.
+
+Two habits that came out of this, both worth keeping:
+
+- **Run a no-op control first.** A mutation that fails to *compile* produces no
+  `test result:` line and reads exactly like an escape.
+- **Check the mutation actually applied** before concluding a test missed it.
 
 ### Carried debt, none blocking
 
@@ -114,6 +148,16 @@ reindex operation.
   `i64::MAX`.
 - **A fixture that is a hash is a sample, not a constant.** Test both halves of
   the range, and assert the fixture still has the property the test needs.
+- **Webhook progress is recorded only after an endpoint accepts.** Recording
+  first turns a failed delivery into a silently skipped event.
+- **A node writes only its own progress record.** The moment two nodes write
+  one record, last-writer-wins starts discarding delivery history.
+- **The egress policy is checked before *every* delivery**, not only at
+  registration, and every resolved address is checked rather than the first. A
+  hostname is not a destination.
+- **Webhook ownership hashes with FNV-1a, never `DefaultHasher`**, which is not
+  stable between Rust versions — ownership shifting under a compiler upgrade
+  would reshuffle every subscription on a rolling restart.
 
 ## Conventions for this file
 
