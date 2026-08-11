@@ -36,3 +36,7 @@ harness = false
 [[bench]]
 name = "query_path"
 harness = false
+
+[[bench]]
+name = "concurrent_writes"
+harness = false
