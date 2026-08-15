@@ -145,6 +145,29 @@ construction the right answer to measure against.
   rebuilds one that cannot, and the assertion is back to a single graph with the
   same bar — minimum 0.9600 over 1,500 builds, against 0.5350 before. The whole
   investigation is in [Deviations](deviations.md).
+- `a_healthy_graph_at_a_realistic_width_is_not_rebuilt` — **`#[ignore]`d; run
+  it in release after touching `index.rs`.** The guard added above has a
+  threshold, and the threshold was first set from a 400-vector, 16-dimensional
+  fixture. Both turned out to matter: at 384 dimensions a fixed search budget
+  covers less of a growing collection, so ordinary misses climbed with size
+  until every build at 4,000 vectors was discarded, rebuilt twice, and reported
+  as losing data. This asserts a healthy graph at a realistic width is left
+  alone. It is ignored because a 384-dimensional build is 146 s in debug
+  against 21 s in release:
+
+  ```bash
+  cargo test -p kimmy-vector --release -- --ignored a_healthy_graph
+  ```
+
+- `reachability_distribution_by_collection_size` and
+  `the_threshold_separates_catastrophic_builds_from_healthy_ones` —
+  **`#[ignore]`d, and they are the measurement, not a check.** They re-derive
+  the two distributions the reachability constants are sized from: what a
+  healthy build scores across widths and sizes, and how far that sits from a
+  catastrophic one. Run them when changing any `REACHABILITY_*` constant, and
+  put the numbers in the comment. Three constants in that file have now been
+  set from an assumption, so the arithmetic ships with the code
+  ([ADR-061](decisions.md)).
 - `the_top_result_matches_exact_search` — approximation is acceptable in the
   tail, not at rank 1
 - `scores_match_the_exact_path_exactly` — the graph's own distances never reach

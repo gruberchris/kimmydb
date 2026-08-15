@@ -661,13 +661,19 @@ mod tests {
     /// threshold of 8. If this starts failing, the thing to measure is
     /// `reachability_distribution_by_collection_size` — not this number.
     ///
-    /// **Ignored, and run by its own CI job in release.** A 384-dimensional
-    /// graph costs 146 seconds to build in a debug profile against 21 in
-    /// release, and doubling the default suite to hold one property is a good
-    /// way to have the property removed later. Same arrangement, and the same
-    /// reasoning, as the cluster harness.
+    /// **Ignored, and run in release.** A 384-dimensional graph costs 146
+    /// seconds to build in a debug profile against 21 in release, so it is not
+    /// worth doubling the default suite. Run it after touching anything in this
+    /// file:
+    ///
+    /// ```bash
+    /// cargo test -p kimmy-vector --release -- --ignored a_healthy_graph
+    /// ```
+    ///
+    /// [Testing](../../../docs/testing.md) lists it with the other checks that
+    /// are run deliberately rather than automatically.
     #[test]
-    #[ignore = "384-dimensional builds are minutes in debug; CI runs this in release"]
+    #[ignore = "384-dimensional builds are minutes in debug; run it in release"]
     fn a_healthy_graph_at_a_realistic_width_is_not_rebuilt() {
         const COUNT: usize = 1_000;
         const DIM: usize = 384;

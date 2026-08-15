@@ -124,10 +124,13 @@ been separating routine orphaning from catastrophic orphaning.
 
 **Three constants in one file have now been sized against an assumption.** Both
 distributions ship as `#[ignore]`d tests so the next person re-derives them
-instead of trusting them, and the regression test runs at 384 dimensions in its
-own CI job in release — 21 s there against 146 s in debug, on the cluster
-harness's reasoning that a suite doubled to hold one property loses the
-property.
+instead of trusting them, and the regression test is `#[ignore]`d too because a
+384-dimensional build is 146 s in debug against 21 s in release. All three are
+listed in [Testing](testing.md) under invariant 6, and run deliberately:
+
+```bash
+cargo test -p kimmy-vector --release -- --ignored a_healthy_graph
+```
 
 ### #81, the branch before this one — still worth reading
 
